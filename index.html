@@ -564,7 +564,7 @@ const box       = document.getElementById("box");
 const container = document.getElementById("container");
 const stream    = document.getElementById("stream");
 
-// ── Bootstrap: fetch camera dims, then init box ───
+// ── Bootstrap: fetch camera dims + state, then init UI ─
 fetch("/camera_info")
     .then(r => r.json())
     .then(info => {
@@ -572,9 +572,90 @@ fetch("/camera_info")
         LORES_H = info.lores.h;
         SCALE_X = info.scale.x;
         SCALE_Y = info.scale.y;
+        return fetch("/state");
+    })
+    .then(r => r.json())
+    .then(state => {
+        restoreState(state);
         initBox();
     })
-    .catch(() => initBox()); // fallback if server not ready
+    .catch(() => initBox());
+
+function restoreState(s) {
+    // Autofocus
+    autofocus = s.autofocus !== undefined ? s.autofocus : true;
+    const afBtn = document.getElementById("af-btn");
+    const focusRow = document.getElementById("focus-slider-row");
+    afBtn.textContent = autofocus ? "AF On" : "AF Off";
+    afBtn.className   = autofocus ? "btn active" : "btn";
+    focusRow.style.opacity      = autofocus ? "0.35" : "1";
+    focusRow.style.pointerEvents = autofocus ? "none" : "auto";
+
+    // Focus
+    if (s.focus !== undefined) {
+        const r = document.getElementById("focus-range");
+        r.value = s.focus;
+        document.getElementById("focus-val").textContent = parseFloat(s.focus).toFixed(1);
+    }
+
+    // Exposure
+    if (s.exposure !== undefined) {
+        const r = document.querySelector("input[oninput='onExposure(this.value)']");
+        if (r) { r.value = s.exposure; onExposureDisplay(s.exposure); }
+    }
+
+    // Gain
+    if (s.gain !== undefined) {
+        const r = document.querySelector("input[oninput='onGain(this.value)']");
+        if (r) { r.value = s.gain; document.getElementById("gain-val").textContent = parseFloat(s.gain).toFixed(1) + "×"; }
+    }
+
+    // Brightness
+    if (s.brightness !== undefined) {
+        const r = document.querySelector("input[oninput='onBrightness(this.value)']");
+        if (r) { r.value = s.brightness; document.getElementById("bright-val").textContent = parseFloat(s.brightness).toFixed(2); }
+    }
+
+    // Contrast
+    if (s.contrast !== undefined) {
+        const r = document.querySelector("input[oninput='onContrast(this.value)']");
+        if (r) { r.value = s.contrast; document.getElementById("contrast-val").textContent = parseFloat(s.contrast).toFixed(2) + "×"; }
+    }
+
+    // Saturation
+    if (s.saturation !== undefined) {
+        const r = document.querySelector("input[oninput='onSaturation(this.value)']");
+        if (r) { r.value = s.saturation; document.getElementById("sat-val").textContent = parseFloat(s.saturation).toFixed(2) + "×"; }
+    }
+
+    // Sharpness
+    if (s.sharpness !== undefined) {
+        const r = document.querySelector("input[oninput='onSharpness(this.value)']");
+        if (r) { r.value = s.sharpness; document.getElementById("sharp-val").textContent = parseFloat(s.sharpness).toFixed(2) + "×"; }
+    }
+
+    // AWB
+    awbEnabled = s.awb !== undefined ? s.awb : true;
+    const awbBtn = document.getElementById("awb-btn");
+    awbBtn.textContent = awbEnabled ? "AWB On" : "AWB Off";
+    awbBtn.className   = awbEnabled ? "btn active" : "btn";
+
+    // Noise reduction
+    if (s.noise_reduction !== undefined) {
+        document.getElementById("nr-select").value = s.noise_reduction;
+    }
+
+    // Recording quality
+    if (s.rec_quality) {
+        if (s.rec_quality.crf !== undefined) {
+            const r = document.querySelector("input[oninput='onCRF(this.value)']");
+            if (r) { r.value = s.rec_quality.crf; document.getElementById("crf-val").textContent = s.rec_quality.crf; }
+        }
+        if (s.rec_quality.preset) {
+            document.getElementById("preset-select").value = s.rec_quality.preset;
+        }
+    }
+}
 
 function initBox() {
     // Default crop: centre half of the frame
@@ -746,16 +827,15 @@ function toggleAF() {
     postControls({ autofocus });
 }
 
-// Dim manual focus slider when AF is on at startup
-document.getElementById("focus-slider-row").style.opacity       = "0.35";
-document.getElementById("focus-slider-row").style.pointerEvents = "none";
-
 // ── Exposure ──────────────────────────────────────
-function onExposure(v) {
-    const us   = parseInt(v);
-    const frac = Math.round(1_000_000 / us);
+function onExposureDisplay(v) {
+    const frac = Math.round(1_000_000 / Math.max(1, parseInt(v)));
     document.getElementById("exp-val").textContent = `1/${frac}`;
-    postControls({ exposure: us });
+}
+
+function onExposure(v) {
+    onExposureDisplay(v);
+    postControls({ exposure: parseInt(v) });
 }
 
 // ── Gain ──────────────────────────────────────────

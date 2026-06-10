@@ -83,8 +83,14 @@ measured_fps   = 30.0              # running estimate, initialised to 30
 def capture_loop():
     global latest_preview, latest_hires, measured_fps
     while True:
-        # Use separate capture_array calls per stream — most reliable across
-        # Picamera2 versions. "main" = hires RGB888, "lores" = preview YUV420.
+        # Flush any pending control changes into the next capture request.
+        # Doing this inside the loop (not from the Flask thread) ensures
+        # libcamera actually processes them.
+        with _controls_lock:
+            if _pending_controls:
+                picam2.set_controls(_pending_controls.copy())
+                _pending_controls.clear()
+
         hires = picam2.capture_array("main")
         lores = picam2.capture_array("lores")
 
@@ -113,65 +119,95 @@ def capture_loop():
             latest_preview = preview_bgr
             latest_hires   = hires
 
+
+# ═══════════════════════════════════════════════════════════
+#  CAMERA STATE + CONTROLS
+#
+#  cam_state is the single source of truth for every control.
+#  When the UI posts a change we update cam_state and set a
+#  flag so capture_loop applies it on the very next frame.
+#  Applying controls inside the capture loop is the correct
+#  Picamera2 pattern — set_controls() called outside a
+#  request context can be silently ignored by libcamera.
+# ═══════════════════════════════════════════════════════════
+
+cam_state = {
+    "autofocus":      True,
+    "focus":          5.0,
+    "exposure":       10000,   # microseconds
+    "gain":           1.0,
+    "brightness":     0.0,
+    "contrast":       1.0,
+    "saturation":     1.0,
+    "sharpness":      1.0,
+    "awb":            True,
+    "noise_reduction": 1,      # 0=Off 1=Fast 2=HighQuality
+}
+
+_pending_controls = {}        # built up by update_controls(), flushed in capture_loop
+_controls_lock    = threading.Lock()
+
+
+def _build_libcamera_ctrl(key, value):
+    """Translate a cam_state key+value into a picamera2 control dict entry.
+    Keys must be strings — picamera2.set_controls() does not accept ControlId objects."""
+    if key == "exposure":
+        return {"ExposureTime": int(value)}
+    if key == "gain":
+        return {"AnalogueGain": float(value)}
+    if key == "autofocus":
+        mode = controls.AfModeEnum.Continuous if value else controls.AfModeEnum.Manual
+        d = {"AfMode": mode}
+        if value:
+            d["AfTrigger"] = controls.AfTriggerEnum.Start
+        return d
+    if key == "focus":
+        return {"LensPosition": float(value)}
+    if key == "brightness":
+        return {"Brightness": float(value)}
+    if key == "contrast":
+        return {"Contrast": float(value)}
+    if key == "saturation":
+        return {"Saturation": float(value)}
+    if key == "sharpness":
+        return {"Sharpness": float(value)}
+    if key == "awb":
+        return {"AwbEnable": bool(value)}
+    if key == "noise_reduction":
+        mode_map = {
+            0: controls.draft.NoiseReductionModeEnum.Off,
+            1: controls.draft.NoiseReductionModeEnum.Fast,
+            2: controls.draft.NoiseReductionModeEnum.HighQuality,
+        }
+        return {"NoiseReductionMode": mode_map.get(int(value),
+                controls.draft.NoiseReductionModeEnum.Fast)}
+    return {}
+
+
+def update_controls(changes: dict):
+    """
+    Called by the /controls route.
+    Updates cam_state and queues the libcamera controls for the next frame.
+    """
+    with _controls_lock:
+        for key, value in changes.items():
+            if key in cam_state and value is not None:
+                cam_state[key] = value
+                _pending_controls.update(_build_libcamera_ctrl(key, value))
+
+
+def _apply_initial_controls():
+    """Push all cam_state defaults to the camera once on startup."""
+    ctrl = {}
+    for key, value in cam_state.items():
+        ctrl.update(_build_libcamera_ctrl(key, value))
+    picam2.set_controls(ctrl)
+
+
+_apply_initial_controls()
+
 capture_thread = threading.Thread(target=capture_loop, daemon=True)
 capture_thread.start()
-
-
-# ═══════════════════════════════════════════════════════════
-#  CAMERA CONTROLS
-# ═══════════════════════════════════════════════════════════
-def set_controls(
-    exposure=None, gain=None,
-    autofocus=None, focus=None,
-    brightness=None, contrast=None,
-    saturation=None, sharpness=None,
-    awb=None, noise_reduction=None,
-):
-    ctrl = {}
-
-    if exposure is not None:
-        ctrl[controls.ExposureTime] = int(exposure)
-
-    if gain is not None:
-        ctrl[controls.AnalogueGain] = float(gain)
-
-    if autofocus is not None:
-        ctrl[controls.AfMode] = (
-            controls.AfModeEnum.Continuous if autofocus else controls.AfModeEnum.Manual
-        )
-
-    if focus is not None:
-        ctrl[controls.LensPosition] = float(focus)
-
-    if brightness is not None:
-        # libcamera: -1.0 to 1.0
-        ctrl[controls.Brightness] = float(brightness)
-
-    if contrast is not None:
-        # libcamera: 0.0 to 32.0, default 1.0
-        ctrl[controls.Contrast] = float(contrast)
-
-    if saturation is not None:
-        # libcamera: 0.0 to 32.0, default 1.0
-        ctrl[controls.Saturation] = float(saturation)
-
-    if sharpness is not None:
-        # libcamera: 0.0 to 16.0, default 1.0
-        ctrl[controls.Sharpness] = float(sharpness)
-
-    if awb is not None:
-        ctrl[controls.AwbEnable] = bool(awb)
-
-    if noise_reduction is not None:
-        # 0=Off, 1=Fast, 2=HighQuality
-        mode_map = {0: controls.draft.NoiseReductionModeEnum.Off,
-                    1: controls.draft.NoiseReductionModeEnum.Fast,
-                    2: controls.draft.NoiseReductionModeEnum.HighQuality}
-        ctrl[controls.draft.NoiseReductionMode] = mode_map.get(int(noise_reduction),
-                                                                controls.draft.NoiseReductionModeEnum.Fast)
-
-    if ctrl:
-        picam2.set_controls(ctrl)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -407,21 +443,22 @@ def set_roi():
     return jsonify({**roi, "hires_w": hw, "hires_h": hh})
 
 
+@app.route('/state')
+def get_state():
+    """Return current cam_state so the UI can restore itself on page load."""
+    with _controls_lock:
+        state = dict(cam_state)
+    state["recording"]  = recording
+    state["rec_quality"] = rec_quality
+    return jsonify(state)
+
+
 @app.route('/controls', methods=['POST'])
 def controls_route():
     data = request.json
-    set_controls(
-        exposure       = data.get("exposure"),
-        gain           = data.get("gain"),
-        autofocus      = data.get("autofocus"),
-        focus          = data.get("focus"),
-        brightness     = data.get("brightness"),
-        contrast       = data.get("contrast"),
-        saturation     = data.get("saturation"),
-        sharpness      = data.get("sharpness"),
-        awb            = data.get("awb"),
-        noise_reduction= data.get("noise_reduction"),
-    )
+    # Only pass keys that are actually present in the payload
+    changes = {k: v for k, v in data.items() if v is not None}
+    update_controls(changes)
     return jsonify({"status": "ok"})
 
 
