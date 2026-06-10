@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pi Camera Control</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap');
+
+        :root {
+            --bg:        #0a0a0c;
+            --surface:   #13131a;
+            --panel:     #1a1a24;
+            --border:    #2a2a38;
+            --accent:    #00e5ff;
+            --accent2:   #ff4466;
+            --rec:       #ff2244;
+            --green:     #00ff88;
+            --text:      #e8e8f0;
+            --muted:     #6a6a80;
+            --mono:      'JetBrains Mono', monospace;
+            --sans:      'Inter', sans-serif;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--sans);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        /* ── Top bar ── */
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 20px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .topbar-title {
+            font-family: var(--mono);
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            color: var(--accent);
+            text-transform: uppercase;
+        }
+
+        .topbar-title span { color: var(--muted); font-weight: 400; }
+
+        #rec-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: var(--mono);
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            color: var(--muted);
+            transition: color 0.3s;
+        }
+
+        #rec-status.active { color: var(--rec); }
+
+        #rec-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--muted);
+            transition: background 0.3s;
+        }
+
+        #rec-status.active #rec-dot {
+            background: var(--rec);
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: 0.3; }
+        }
+
+        /* ── Main layout ── */
+        .main {
+            display: flex;
+            flex: 1;
+            gap: 0;
+        }
+
+        /* ── Preview area ── */
+        .preview-wrap {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: #050508;
+            position: relative;
+        }
+
+        #container {
+            position: relative;
+            display: inline-block;
+            line-height: 0;
+        }
+
+        #stream {
+            display: block;
+            width: 100%;
+            max-width: 960px;
+            height: auto;
+            border: 1px solid var(--border);
+        }
+
+        /* Crop box */
+        #box {
+            position: absolute;
+            border: 2px solid var(--accent);
+            cursor: move;
+            box-shadow: 0 0 0 1px rgba(0,229,255,0.15), inset 0 0 0 1px rgba(0,229,255,0.08);
+        }
+
+        /* Resize handles */
+        .handle {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: var(--accent);
+            border: 1px solid var(--bg);
+        }
+
+        .handle.nw { top: -5px;  left: -5px;  cursor: nw-resize; }
+        .handle.ne { top: -5px;  right: -5px; cursor: ne-resize; }
+        .handle.sw { bottom: -5px; left: -5px; cursor: sw-resize; }
+        .handle.se { bottom: -5px; right: -5px; cursor: se-resize; }
+        .handle.n  { top: -5px;  left: 50%; transform: translateX(-50%); cursor: n-resize; }
+        .handle.s  { bottom: -5px; left: 50%; transform: translateX(-50%); cursor: s-resize; }
+        .handle.w  { top: 50%;  left: -5px; transform: translateY(-50%); cursor: w-resize; }
+        .handle.e  { top: 50%;  right: -5px; transform: translateY(-50%); cursor: e-resize; }
+
+        /* ── Select ── */
+        select {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 12px;
+            padding: 6px 8px;
+            border-radius: 3px;
+            outline: none;
+            width: 100%;
+            cursor: pointer;
+            transition: border-color 0.2s;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+
+        select:focus { border-color: var(--accent); }
+
+        /* ── Crop readout ── */
+        #crop-readout {
+            position: absolute;
+            bottom: -26px;
+            left: 0;
+            font-family: var(--mono);
+            font-size: 10px;
+            white-space: nowrap;
+            background: rgba(0,0,0,0.75);
+            padding: 3px 7px;
+            border-radius: 2px;
+            pointer-events: none;
+            line-height: 1.5;
+        }
+
+        #readout-preview { color: var(--muted); }
+        #readout-arrow   { color: var(--border); }
+        #readout-rec     { color: var(--accent); font-weight: 600; }
+
+        /* ── Side panel ── */
+        .sidebar {
+            width: 280px;
+            min-width: 280px;
+            background: var(--surface);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .section {
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-label {
+            font-family: var(--mono);
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            color: var(--muted);
+            text-transform: uppercase;
+            margin-bottom: 14px;
+        }
+
+        /* ── ROI inputs ── */
+        .roi-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .field label {
+            font-family: var(--mono);
+            font-size: 10px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .field input {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 13px;
+            padding: 6px 8px;
+            border-radius: 3px;
+            outline: none;
+            width: 100%;
+            transition: border-color 0.2s;
+        }
+
+        .field input:focus { border-color: var(--accent); }
+
+        /* ── Sliders ── */
+        .slider-row {
+            margin-bottom: 14px;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 6px;
+        }
+
+        .slider-header .name {
+            font-size: 12px;
+            color: var(--text);
+        }
+
+        .slider-header .val {
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--accent);
+            min-width: 50px;
+            text-align: right;
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 2px solid var(--bg);
+            box-shadow: 0 0 6px rgba(0,229,255,0.4);
+        }
+
+        input[type=range]::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 2px solid var(--bg);
+        }
+
+        /* ── Buttons ── */
+        .btn-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            background: var(--panel);
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
+        }
+
+        .btn:hover { background: var(--border); }
+
+        .btn.active {
+            background: rgba(0,229,255,0.12);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn.rec-btn {
+            background: rgba(255,34,68,0.12);
+            border-color: var(--rec);
+            color: var(--rec);
+        }
+
+        .btn.rec-btn:hover { background: rgba(255,34,68,0.22); }
+
+        .btn.rec-btn.disabled {
+            opacity: 0.35;
+            pointer-events: none;
+        }
+
+        .btn.stop-btn {
+            border-color: var(--border);
+            color: var(--muted);
+        }
+
+        .btn.stop-btn.active {
+            background: rgba(255,68,102,0.12);
+            border-color: var(--accent2);
+            color: var(--accent2);
+        }
+
+        .btn.roi-apply {
+            background: rgba(0,229,255,0.08);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn.roi-apply:hover { background: rgba(0,229,255,0.16); }
+
+        /* ── Scrollbar ── */
+        .sidebar::-webkit-scrollbar { width: 4px; }
+        .sidebar::-webkit-scrollbar-track { background: var(--surface); }
+        .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    </style>
+</head>
+<body>
+
+<div class="topbar">
+    <div class="topbar-title">Pi Cam <span>/ IMX519</span></div>
+    <div id="fps-display" style="font-family:var(--mono);font-size:12px;color:var(--muted);">
+        <span id="fps-val">–</span> <span style="color:var(--border)">fps</span>
+    </div>
+    <div id="rec-status">
+        <div id="rec-dot"></div>
+        <span id="rec-label">IDLE</span>
+    </div>
+</div>
+
+<div class="main">
+
+    <!-- Preview -->
+    <div class="preview-wrap">
+        <div id="container">
+            <img id="stream" src="/video_feed" alt="Camera stream">
+            <div id="box">
+                <div class="handle nw" data-dir="nw"></div>
+                <div class="handle n"  data-dir="n"></div>
+                <div class="handle ne" data-dir="ne"></div>
+                <div class="handle e"  data-dir="e"></div>
+                <div class="handle se" data-dir="se"></div>
+                <div class="handle s"  data-dir="s"></div>
+                <div class="handle sw" data-dir="sw"></div>
+                <div class="handle w"  data-dir="w"></div>
+                <div id="crop-readout">
+                    <span id="readout-preview">PREVIEW  1280×720</span><span id="readout-arrow"> → </span><span id="readout-rec">REC  2328×1748</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+
+        <!-- ROI -->
+        <div class="section">
+            <div class="section-label">Crop Region</div>
+            <div class="roi-grid">
+                <div class="field"><label>X</label><input id="x" type="number" value="0"></div>
+                <div class="field"><label>Y</label><input id="y" type="number" value="0"></div>
+                <div class="field"><label>Width</label><input id="w" type="number" value="640"></div>
+                <div class="field"><label>Height</label><input id="h" type="number" value="360"></div>
+            </div>
+            <div class="btn-row">
+                <button class="btn roi-apply" onclick="applyROI()">Apply Crop</button>
+                <button class="btn" onclick="resetROI()">Reset</button>
+            </div>
+        </div>
+
+        <!-- Focus -->
+        <div class="section">
+            <div class="section-label">Focus</div>
+            <div class="btn-row" style="margin-bottom:14px;">
+                <button id="af-btn" class="btn active" onclick="toggleAF()">AF On</button>
+            </div>
+            <div class="slider-row" id="focus-slider-row">
+                <div class="slider-header">
+                    <span class="name">Lens Position</span>
+                    <span class="val" id="focus-val">5.0</span>
+                </div>
+                <input type="range" id="focus-range" min="0" max="20" step="0.1" value="5"
+                       oninput="onFocus(this.value)">
+            </div>
+        </div>
+
+        <!-- Exposure -->
+        <div class="section">
+            <div class="section-label">Exposure</div>
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span class="name">Shutter</span>
+                    <span class="val" id="exp-val">1/100</span>
+                </div>
+                <input type="range" min="100" max="33333" step="100" value="10000"
+                       oninput="onExposure(this.value)">
+            </div>
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span class="name">Gain (ISO)</span>
+                    <span class="val" id="gain-val">1.0×</span>
+                </div>
+                <input type="range" min="1" max="10" step="0.1" value="1"
+                       oninput="onGain(this.value)">
+            </div>
+        </div>
+
+        <!-- Image Quality -->
+        <div class="section">
+            <div class="section-label">Image Quality</div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span class="name">Brightness</span>
+                    <span class="val" id="bright-val">0.0</span>
+                </div>
+                <input type="range" min="-1" max="1" step="0.05" value="0"
+                       oninput="onBrightness(this.value)">
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span class="name">Contrast</span>
+                    <span class="val" id="contrast-val">1.0×</span>
+                </div>
+                <input type="range" min="0" max="4" step="0.05" value="1"
+                       oninput="onContrast(this.value)">
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span class="name">Saturation</span>
+                    <span class="val" id="sat-val">1.0×</span>
+                </div>
+                <input type="range" min="0" max="4" step="0.05" value="1"
+                       oninput="onSaturation(this.value)">
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span class="name">Sharpness</span>
+                    <span class="val" id="sharp-val">1.0×</span>
+                </div>
+                <input type="range" min="0" max="8" step="0.1" value="1"
+                       oninput="onSharpness(this.value)">
+            </div>
+
+            <div class="btn-row" style="margin-bottom:10px;">
+                <button id="awb-btn" class="btn active" onclick="toggleAWB()">AWB On</button>
+            </div>
+
+            <div class="field" style="margin-bottom:0;">
+                <label>Noise Reduction</label>
+                <select id="nr-select" onchange="onNoiseReduction(this.value)">
+                    <option value="1" selected>Fast</option>
+                    <option value="2">High Quality</option>
+                    <option value="0">Off</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Recording Quality -->
+        <div class="section">
+            <div class="section-label">Recording Quality</div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span class="name">CRF <span style="color:var(--muted);font-size:10px;">(lower = better)</span></span>
+                    <span class="val" id="crf-val">18</span>
+                </div>
+                <input type="range" min="10" max="30" step="1" value="18"
+                       oninput="onCRF(this.value)">
+            </div>
+
+            <div class="field">
+                <label>Encoder Preset</label>
+                <select id="preset-select" onchange="onPreset(this.value)">
+                    <option value="fast" selected>Fast</option>
+                    <option value="medium">Medium</option>
+                    <option value="slow">Slow (best quality)</option>
+                    <option value="ultrafast">Ultrafast (low CPU)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Record -->
+        <div class="section">
+            <div class="section-label">Record</div>
+            <div class="btn-row">
+                <button id="start-btn" class="btn rec-btn" onclick="startRec()">● Start</button>
+                <button id="stop-btn"  class="btn stop-btn" onclick="stopRec()">■ Stop</button>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+// ── Camera info (fetched from server on load) ──────
+// These are set once from /camera_info and used for all
+// lores↔hires coordinate conversions.
+let LORES_W = 1280, LORES_H = 720;
+let SCALE_X  = 1,    SCALE_Y  = 1;
+
+let autofocus  = true;
+let awbEnabled = true;
+let isRecording = false;
+
+const box       = document.getElementById("box");
+const container = document.getElementById("container");
+const stream    = document.getElementById("stream");
+
+// ── Bootstrap: fetch camera dims + state, then init UI ─
+fetch("/camera_info")
+    .then(r => r.json())
+    .then(info => {
+        LORES_W = info.lores.w;
+        LORES_H = info.lores.h;
+        SCALE_X = info.scale.x;
+        SCALE_Y = info.scale.y;
+        return fetch("/state");
+    })
+    .then(r => r.json())
+    .then(state => {
+        restoreState(state);
+        initBox();
+    })
+    .catch(() => initBox());
+
+function restoreState(s) {
+    // Autofocus
+    autofocus = s.autofocus !== undefined ? s.autofocus : true;
+    const afBtn = document.getElementById("af-btn");
+    const focusRow = document.getElementById("focus-slider-row");
+    afBtn.textContent = autofocus ? "AF On" : "AF Off";
+    afBtn.className   = autofocus ? "btn active" : "btn";
+    focusRow.style.opacity      = autofocus ? "0.35" : "1";
+    focusRow.style.pointerEvents = autofocus ? "none" : "auto";
+
+    // Focus
+    if (s.focus !== undefined) {
+        const r = document.getElementById("focus-range");
+        r.value = s.focus;
+        document.getElementById("focus-val").textContent = parseFloat(s.focus).toFixed(1);
+    }
+
+    // Exposure
+    if (s.exposure !== undefined) {
+        const r = document.querySelector("input[oninput='onExposure(this.value)']");
+        if (r) { r.value = s.exposure; onExposureDisplay(s.exposure); }
+    }
+
+    // Gain
+    if (s.gain !== undefined) {
+        const r = document.querySelector("input[oninput='onGain(this.value)']");
+        if (r) { r.value = s.gain; document.getElementById("gain-val").textContent = parseFloat(s.gain).toFixed(1) + "×"; }
+    }
+
+    // Brightness
+    if (s.brightness !== undefined) {
+        const r = document.querySelector("input[oninput='onBrightness(this.value)']");
+        if (r) { r.value = s.brightness; document.getElementById("bright-val").textContent = parseFloat(s.brightness).toFixed(2); }
+    }
+
+    // Contrast
+    if (s.contrast !== undefined) {
+        const r = document.querySelector("input[oninput='onContrast(this.value)']");
+        if (r) { r.value = s.contrast; document.getElementById("contrast-val").textContent = parseFloat(s.contrast).toFixed(2) + "×"; }
+    }
+
+    // Saturation
+    if (s.saturation !== undefined) {
+        const r = document.querySelector("input[oninput='onSaturation(this.value)']");
+        if (r) { r.value = s.saturation; document.getElementById("sat-val").textContent = parseFloat(s.saturation).toFixed(2) + "×"; }
+    }
+
+    // Sharpness
+    if (s.sharpness !== undefined) {
+        const r = document.querySelector("input[oninput='onSharpness(this.value)']");
+        if (r) { r.value = s.sharpness; document.getElementById("sharp-val").textContent = parseFloat(s.sharpness).toFixed(2) + "×"; }
+    }
+
+    // AWB
+    awbEnabled = s.awb !== undefined ? s.awb : true;
+    const awbBtn = document.getElementById("awb-btn");
+    awbBtn.textContent = awbEnabled ? "AWB On" : "AWB Off";
+    awbBtn.className   = awbEnabled ? "btn active" : "btn";
+
+    // Noise reduction
+    if (s.noise_reduction !== undefined) {
+        document.getElementById("nr-select").value = s.noise_reduction;
+    }
+
+    // Recording quality
+    if (s.rec_quality) {
+        if (s.rec_quality.crf !== undefined) {
+            const r = document.querySelector("input[oninput='onCRF(this.value)']");
+            if (r) { r.value = s.rec_quality.crf; document.getElementById("crf-val").textContent = s.rec_quality.crf; }
+        }
+        if (s.rec_quality.preset) {
+            document.getElementById("preset-select").value = s.rec_quality.preset;
+        }
+    }
+}
+
+function initBox() {
+    // Default crop: centre half of the frame
+    const imgW = stream.offsetWidth  || 960;
+    const imgH = stream.offsetHeight || 540;
+    const bw = Math.round(imgW * 0.5);
+    const bh = Math.round(imgH * 0.5);
+    box.style.width  = bw + "px";
+    box.style.height = bh + "px";
+    box.style.left   = Math.round((imgW - bw) / 2) + "px";
+    box.style.top    = Math.round((imgH - bh) / 2) + "px";
+    syncROI();
+}
+
+// ── Drag / resize state ───────────────────────────
+let dragState = null;
+
+function getBoxRect() {
+    return {
+        left:   parseInt(box.style.left)   || 0,
+        top:    parseInt(box.style.top)    || 0,
+        width:  parseInt(box.style.width)  || 100,
+        height: parseInt(box.style.height) || 100,
+    };
+}
+
+box.addEventListener("mousedown", (e) => {
+    if (e.target === box) {
+        e.preventDefault();
+        dragState = { mode: "move", startX: e.clientX, startY: e.clientY, origBox: getBoxRect() };
+    }
+});
+
+document.querySelectorAll(".handle").forEach(h => {
+    h.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragState = { mode: "resize", dir: h.dataset.dir, startX: e.clientX, startY: e.clientY, origBox: getBoxRect() };
+    });
+});
+
+document.addEventListener("mousemove", (e) => {
+    if (!dragState) return;
+    const dx = e.clientX - dragState.startX;
+    const dy = e.clientY - dragState.startY;
+    const o  = dragState.origBox;
+    const imgW = stream.offsetWidth;
+    const imgH = stream.offsetHeight;
+    let { left, top, width, height } = o;
+
+    if (dragState.mode === "move") {
+        left = Math.max(0, Math.min(o.left + dx, imgW - width));
+        top  = Math.max(0, Math.min(o.top  + dy, imgH - height));
+    } else {
+        const dir = dragState.dir;
+        if (dir.includes("e")) width  = Math.max(40, o.width  + dx);
+        if (dir.includes("s")) height = Math.max(30, o.height + dy);
+        if (dir.includes("w")) { left = o.left + dx; width  = Math.max(40, o.width  - dx); }
+        if (dir.includes("n")) { top  = o.top  + dy; height = Math.max(30, o.height - dy); }
+        if (left < 0)              { width  += left;       left = 0; }
+        if (top  < 0)              { height += top;        top  = 0; }
+        if (left + width  > imgW)  { width  = imgW - left; }
+        if (top  + height > imgH)  { height = imgH - top;  }
+    }
+
+    box.style.left   = left   + "px";
+    box.style.top    = top    + "px";
+    box.style.width  = width  + "px";
+    box.style.height = height + "px";
+    syncROI();
+});
+
+document.addEventListener("mouseup", () => { dragState = null; });
+
+// ── ROI sync ──────────────────────────────────────
+// Converts the on-screen box position to lores pixel coords,
+// then computes the hires recording resolution for the readout.
+function syncROI() {
+    const imgW = stream.offsetWidth  || 960;
+    const imgH = stream.offsetHeight || 540;
+
+    // px-on-screen → lores sensor pixels
+    const sX = LORES_W / imgW;
+    const sY = LORES_H / imgH;
+
+    const bx = parseInt(box.style.left)   || 0;
+    const by = parseInt(box.style.top)    || 0;
+    const bw = parseInt(box.style.width)  || 100;
+    const bh = parseInt(box.style.height) || 100;
+
+    const rx = Math.round(bx * sX);
+    const ry = Math.round(by * sY);
+    const rw = Math.round(bw * sX);
+    const rh = Math.round(bh * sY);
+
+    document.getElementById("x").value = rx;
+    document.getElementById("y").value = ry;
+    document.getElementById("w").value = rw;
+    document.getElementById("h").value = rh;
+
+    // Hires crop = what will actually be recorded
+    const hw = Math.round(rw * SCALE_X);
+    const hh = Math.round(rh * SCALE_Y);
+
+    document.getElementById("readout-preview").textContent = `PREVIEW  ${rw}×${rh}`;
+    document.getElementById("readout-rec").textContent     = `REC  ${hw}×${hh}`;
+}
+
+function applyROI() {
+    const x = +document.getElementById("x").value;
+    const y = +document.getElementById("y").value;
+    const w = +document.getElementById("w").value;
+    const h = +document.getElementById("h").value;
+
+    fetch(`/set_roi?x=${x}&y=${y}&w=${w}&h=${h}`)
+        .then(r => r.json())
+        .then(data => {
+            // Server returns confirmed hires dims — update readout
+            document.getElementById("readout-preview").textContent = `PREVIEW  ${data.w}×${data.h}`;
+            document.getElementById("readout-rec").textContent     = `REC  ${data.hires_w}×${data.hires_h}`;
+        });
+
+    // Sync box position to the manually typed values
+    const imgW = stream.offsetWidth  || 960;
+    const imgH = stream.offsetHeight || 540;
+    const sX = imgW / LORES_W;
+    const sY = imgH / LORES_H;
+    box.style.left   = Math.round(x * sX) + "px";
+    box.style.top    = Math.round(y * sY) + "px";
+    box.style.width  = Math.round(w * sX) + "px";
+    box.style.height = Math.round(h * sY) + "px";
+}
+
+function resetROI() {
+    document.getElementById("x").value = 0;
+    document.getElementById("y").value = 0;
+    document.getElementById("w").value = LORES_W;
+    document.getElementById("h").value = LORES_H;
+    box.style.left   = "0px";
+    box.style.top    = "0px";
+    box.style.width  = (stream.offsetWidth  || 960) + "px";
+    box.style.height = (stream.offsetHeight || 540) + "px";
+    applyROI();
+}
+
+// ── Shared fetch helper ───────────────────────────
+function postControls(obj) {
+    fetch("/controls", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(obj),
+    });
+}
+
+// ── Focus ─────────────────────────────────────────
+function onFocus(v) {
+    document.getElementById("focus-val").textContent = parseFloat(v).toFixed(1);
+    postControls({ focus: parseFloat(v) });
+}
+
+function toggleAF() {
+    autofocus = !autofocus;
+    const btn = document.getElementById("af-btn");
+    const row = document.getElementById("focus-slider-row");
+    btn.textContent = autofocus ? "AF On" : "AF Off";
+    btn.className   = autofocus ? "btn active" : "btn";
+    row.style.opacity      = autofocus ? "0.35" : "1";
+    row.style.pointerEvents = autofocus ? "none" : "auto";
+    postControls({ autofocus });
+}
+
+// ── Exposure ──────────────────────────────────────
+function onExposureDisplay(v) {
+    const frac = Math.round(1_000_000 / Math.max(1, parseInt(v)));
+    document.getElementById("exp-val").textContent = `1/${frac}`;
+}
+
+function onExposure(v) {
+    onExposureDisplay(v);
+    postControls({ exposure: parseInt(v) });
+}
+
+// ── Gain ──────────────────────────────────────────
+function onGain(v) {
+    document.getElementById("gain-val").textContent = parseFloat(v).toFixed(1) + "×";
+    postControls({ gain: parseFloat(v) });
+}
+
+// ── Brightness ────────────────────────────────────
+function onBrightness(v) {
+    document.getElementById("bright-val").textContent = parseFloat(v).toFixed(2);
+    postControls({ brightness: parseFloat(v) });
+}
+
+// ── Contrast ──────────────────────────────────────
+function onContrast(v) {
+    document.getElementById("contrast-val").textContent = parseFloat(v).toFixed(2) + "×";
+    postControls({ contrast: parseFloat(v) });
+}
+
+// ── Saturation ────────────────────────────────────
+function onSaturation(v) {
+    document.getElementById("sat-val").textContent = parseFloat(v).toFixed(2) + "×";
+    postControls({ saturation: parseFloat(v) });
+}
+
+// ── Sharpness ─────────────────────────────────────
+function onSharpness(v) {
+    document.getElementById("sharp-val").textContent = parseFloat(v).toFixed(2) + "×";
+    postControls({ sharpness: parseFloat(v) });
+}
+
+// ── AWB ───────────────────────────────────────────
+function toggleAWB() {
+    awbEnabled = !awbEnabled;
+    const btn = document.getElementById("awb-btn");
+    btn.textContent = awbEnabled ? "AWB On" : "AWB Off";
+    btn.className   = awbEnabled ? "btn active" : "btn";
+    postControls({ awb: awbEnabled });
+}
+
+// ── Noise Reduction ───────────────────────────────
+function onNoiseReduction(v) {
+    postControls({ noise_reduction: parseInt(v) });
+}
+
+// ── Recording Quality ─────────────────────────────
+function onCRF(v) {
+    document.getElementById("crf-val").textContent = v;
+    fetch("/rec_quality", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ crf: parseInt(v) }),
+    });
+}
+
+function onPreset(v) {
+    fetch("/rec_quality", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ preset: v }),
+    });
+}
+
+// ── Recording ─────────────────────────────────────
+function startRec() {
+    fetch("/record/start").then(() => {
+        isRecording = true;
+        document.getElementById("rec-label").textContent = "REC";
+        document.getElementById("rec-status").classList.add("active");
+        document.getElementById("start-btn").classList.add("disabled");
+        document.getElementById("stop-btn").classList.add("active");
+    });
+}
+
+function stopRec() {
+    if (!isRecording) return;
+    fetch("/record/stop").then(() => {
+        isRecording = false;
+        document.getElementById("rec-label").textContent = "IDLE";
+        document.getElementById("rec-status").classList.remove("active");
+        document.getElementById("start-btn").classList.remove("disabled");
+        document.getElementById("stop-btn").classList.remove("active");
+    });
+}
+
+window.addEventListener("resize", syncROI);
+
+// ── Live FPS polling ──────────────────────────────
+// Poll the server every 2 seconds and update the topbar readout.
+function pollFPS() {
+    fetch("/fps")
+        .then(r => r.json())
+        .then(d => {
+            document.getElementById("fps-val").textContent = d.fps.toFixed(1);
+        })
+        .catch(() => {});
+}
+pollFPS();
+setInterval(pollFPS, 2000);
+</script>
+
+</body>
+</html>
