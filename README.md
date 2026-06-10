@@ -1,6 +1,5 @@
-(FOLDER)
-
-livevideo.py
-
---(templates)
-  index.html
+[your_folder_name]/
+│
+├── livevideo.py
+└── templates/
+    └── index.html
